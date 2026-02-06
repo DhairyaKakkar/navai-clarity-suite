@@ -1,6 +1,4 @@
-// ═══════════════════════════════════════════════════════════════
 // NavAI — Shared Types
-// ═══════════════════════════════════════════════════════════════
 
 export type ActionType = 'click' | 'type' | 'select' | 'scroll' | 'wait';
 export type PlannerMode = 'heuristic' | 'llm';
@@ -18,6 +16,9 @@ export interface PageElement {
   isInput: boolean;
   inputType?: string;
   placeholder?: string;
+  value?: string;
+  isRequired?: boolean;
+  isFilled?: boolean;
   isInViewport: boolean;
   isInDialog: boolean;
 }
@@ -51,6 +52,7 @@ export interface ActionRecord {
 export interface SessionState {
   goal: string;
   active: boolean;
+  completed: boolean;
   step: number;
   current: GuidanceStep | null;
   history: ActionRecord[];
@@ -81,4 +83,5 @@ export type Message =
   | { type: 'NAV_CHANGE'; url: string }
   | { type: 'GET_STATE' }
   | { type: 'STATE'; state: SessionState }
+  | { type: 'COMPLETED' }
   | { type: 'ERROR'; msg: string };

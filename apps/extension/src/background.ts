@@ -1,9 +1,7 @@
-// ═══════════════════════════════════════════════════════════════
 // NavAI — Background Service Worker
-// ═══════════════════════════════════════════════════════════════
 
 import type { Message, SessionState, PageData, GuidanceStep, LLMConfig } from './shared/types';
-import { heuristicPlan, llmPlan } from './shared/planner';
+import { heuristicPlan, llmPlan, isSuccessPage } from './shared/planner';
 
 const log = (...a: unknown[]) => console.debug('[NavAI:bg]', ...a);
 
@@ -14,6 +12,7 @@ const log = (...a: unknown[]) => console.debug('[NavAI:bg]', ...a);
 const EMPTY_STATE: SessionState = {
   goal: '',
   active: false,
+  completed: false,
   step: 1,
   current: null,
   history: [],
@@ -22,7 +21,7 @@ const EMPTY_STATE: SessionState = {
 
 let state: SessionState = { ...EMPTY_STATE };
 let llmConfig: LLMConfig | null = null;
-let processing = false; // Guard against concurrent processTab calls
+let processing = false;
 
 async function saveState() {
   await chrome.storage.local.set({ navai_state: state });
@@ -30,7 +29,7 @@ async function saveState() {
 
 async function loadState() {
   const r = await chrome.storage.local.get(['navai_state', 'navai_llm']);
-  if (r.navai_state) state = r.navai_state;
+  if (r.navai_state) state = { ...EMPTY_STATE, ...r.navai_state };
   if (r.navai_llm) llmConfig = r.navai_llm;
 }
 
@@ -39,6 +38,20 @@ async function loadState() {
 // ═════════════════════════════════════════════════════════════════
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+
+// ═════════════════════════════════════════════════════════════════
+// RESTRICTED URL CHECK
+// ═════════════════════════════════════════════════════════════════
+
+function isRestrictedUrl(url?: string): boolean {
+  if (!url) return true;
+  return url.startsWith('chrome://') ||
+         url.startsWith('chrome-extension://') ||
+         url.startsWith('edge://') ||
+         url.startsWith('about:') ||
+         url.startsWith('chrome-search://') ||
+         url.startsWith('devtools://');
+}
 
 // ═════════════════════════════════════════════════════════════════
 // PLANNER
@@ -63,7 +76,6 @@ async function plan(page: PageData): Promise<GuidanceStep | null> {
 function isStuck(step: GuidanceStep): boolean {
   const recent = state.history.slice(-3);
   if (recent.length < 3) return false;
-  // Check both selector and text match to catch loops
   const sameSelector = recent.every(h => h.selector === step.selector);
   const sameText = step.textHint.length > 3 && recent.every(h => h.text === step.textHint);
   return sameSelector || sameText;
@@ -74,7 +86,7 @@ function isStuck(step: GuidanceStep): boolean {
 // ═════════════════════════════════════════════════════════════════
 
 async function processTab(tabId: number) {
-  if (!state.active) return;
+  if (!state.active || state.completed) return;
   if (processing) {
     log('Already processing, skipping');
     return;
@@ -84,21 +96,41 @@ async function processTab(tabId: number) {
   log('Processing tab', tabId);
 
   try {
+    // Check if tab URL is restricted
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || isRestrictedUrl(tab.url)) {
+      broadcast({ type: 'ERROR', msg: 'NavAI cannot run on this page. Navigate to a regular website to continue.' });
+      return;
+    }
+
     const resp = await chrome.tabs.sendMessage(tabId, { type: 'EXTRACT' } as Message);
 
     if (!resp || resp.type !== 'PAGE_DATA') {
       log('No page data');
+      broadcast({ type: 'ERROR', msg: 'Could not read this page. Try refreshing or navigating to another page.' });
       return;
     }
 
     const page: PageData = resp.data;
     log(`Page: ${page.url}, ${page.elements.length} elements, dialog: ${page.hasOpenDialog}`);
 
+    // Check for completion
+    if (state.step > 1 && isSuccessPage(page)) {
+      log('Success page detected!');
+      state.completed = true;
+      state.current = null;
+      await saveState();
+      broadcast({ type: 'STATE', state: { ...state } });
+      broadcast({ type: 'COMPLETED' });
+      await chrome.tabs.sendMessage(tabId, { type: 'HIDE_OVERLAY' } as Message).catch(() => {});
+      return;
+    }
+
     let step = await plan(page);
 
     if (step && isStuck(step)) {
       log('Stuck loop detected');
-      broadcast({ type: 'ERROR', msg: 'Seems stuck on the same element. Try rephrasing your goal or click Skip.' });
+      broadcast({ type: 'ERROR', msg: 'Seems stuck on the same element. Try clicking Skip or rephrase your goal.' });
       step = null;
     }
 
@@ -107,11 +139,11 @@ async function processTab(tabId: number) {
       await saveState();
       broadcast({ type: 'STATE', state: { ...state } });
       await chrome.tabs.sendMessage(tabId, { type: 'SHOW_STEP', step } as Message);
-    } else {
+    } else if (!state.completed) {
       state.current = null;
       await saveState();
       broadcast({ type: 'STATE', state: { ...state } });
-      broadcast({ type: 'ERROR', msg: 'No clear next step. Try "Rescan" or rephrase your goal.' });
+      broadcast({ type: 'ERROR', msg: 'No clear next step found. Try "Rescan" or scroll to reveal more elements.' });
     }
   } catch (e) {
     log('Process error:', e);
@@ -128,7 +160,9 @@ async function processTab(tabId: number) {
             await chrome.tabs.sendMessage(tabId, { type: 'SHOW_STEP', step } as Message);
           }
         }
-      } catch {}
+      } catch {
+        broadcast({ type: 'ERROR', msg: 'Could not connect to this page. Try refreshing.' });
+      }
     }, 1000);
   } finally {
     processing = false;
@@ -157,6 +191,7 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, respond) => {
         ...EMPTY_STATE,
         goal: msg.goal,
         active: true,
+        completed: false,
         mode: msg.mode,
       };
       saveState().then(async () => {
@@ -222,7 +257,6 @@ chrome.runtime.onMessage.addListener((msg: Message, sender, respond) => {
 
       saveState().then(() => {
         broadcast({ type: 'STATE', state: { ...state } });
-        // Delay to allow navigation
         setTimeout(async () => {
           const id = sender.tab?.id ?? await getActiveTabId();
           if (id) processTab(id);

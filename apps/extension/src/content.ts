@@ -1,6 +1,4 @@
-// ═══════════════════════════════════════════════════════════════
 // NavAI — Content Script
-// ═══════════════════════════════════════════════════════════════
 
 import type { Message, PageData, PageElement, GuidanceStep } from './shared/types';
 
@@ -35,16 +33,10 @@ function isInViewport(rect: DOMRect): boolean {
          rect.right > 0 && rect.left < window.innerWidth;
 }
 
-// Find the "active panel" — the container that currently has user focus.
-// This handles Gmail compose, modals, popups — anything with focus.
-// BrowserBee-inspired: find the active panel by walking up from focused element.
-// Key insight: don't try to detect "dialogs" — find the FORM/PANEL the user is in.
 function findActivePanel(): HTMLElement | null {
-  // 1. Check for native dialog or ARIA dialog first
   const dialog = document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]') as HTMLElement | null;
   if (dialog && dialog.getBoundingClientRect().width > 50) return dialog;
 
-  // 2. Walk up from activeElement to find a form-like panel
   const active = document.activeElement as HTMLElement | null;
   if (!active || active === document.body || active === document.documentElement) return null;
 
@@ -53,20 +45,15 @@ function findActivePanel(): HTMLElement | null {
   let depth = 0;
 
   while (cur && cur !== document.body && depth < 15) {
-    // Count interactive children at this level
     const inputs = cur.querySelectorAll('input, textarea, [contenteditable="true"], select');
     const buttons = cur.querySelectorAll('button, [role="button"], a[href]');
     const total = inputs.length + buttons.length;
 
-    // A good panel has inputs AND buttons (like compose: To + Subject + Send)
     if (inputs.length >= 1 && buttons.length >= 1 && total >= 3) {
       bestPanel = cur;
-      // If the panel is reasonably sized (not the whole page), use it
       const rect = cur.getBoundingClientRect();
       const pageArea = window.innerWidth * window.innerHeight;
-      if (rect.width * rect.height < pageArea * 0.8) {
-        break; // Good panel, not too big
-      }
+      if (rect.width * rect.height < pageArea * 0.8) break;
     }
     cur = cur.parentElement as HTMLElement | null;
     depth++;
@@ -145,14 +132,39 @@ function getLabel(el: HTMLElement): string {
   return '';
 }
 
+function getInputValue(el: HTMLElement): string {
+  if (el instanceof HTMLInputElement) return el.value;
+  if (el instanceof HTMLTextAreaElement) return el.value;
+  if (el instanceof HTMLSelectElement) return el.value;
+  if (el.getAttribute('contenteditable') === 'true') return (el.textContent ?? '').trim();
+  return '';
+}
+
+function isInputFilled(el: HTMLElement): boolean {
+  const val = getInputValue(el);
+  if (val.length > 0) return true;
+  // Checkboxes/radios: check if checked
+  if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+    return el.checked;
+  }
+  return false;
+}
+
+function isRequired(el: HTMLElement): boolean {
+  if (el.hasAttribute('required')) return true;
+  if (el.getAttribute('aria-required') === 'true') return true;
+  // Check if label contains asterisk
+  const label = getLabel(el);
+  if (label.includes('*')) return true;
+  return false;
+}
+
 function extractPage(): PageData {
   const activePanel = findActivePanel();
   const hasOpenDialog = activePanel !== null;
 
   log(`Active panel: ${hasOpenDialog ? activePanel!.tagName + '.' + (activePanel!.className || '').substring(0, 30) : 'none'}`);
 
-  // KEY INSIGHT from BrowserBee/browser-use: when a panel is active,
-  // ONLY extract from that panel. Don't mix compose elements with page elements.
   const searchRoot = hasOpenDialog ? activePanel! : document;
   const nodes = searchRoot.querySelectorAll(INTERACTIVE_SELECTOR);
   const seen = new Set<Element>();
@@ -171,7 +183,6 @@ function extractPage(): PageData {
     if (rect.width < 5 || rect.height < 5) continue;
     if (!isVisible(el)) continue;
 
-    // Dedup: prefer child over parent
     const parentInteractive = el.parentElement?.closest(INTERACTIVE_SELECTOR);
     if (parentInteractive && seen.has(parentInteractive)) {
       seen.delete(parentInteractive);
@@ -186,7 +197,6 @@ function extractPage(): PageData {
     rawElements.push({ el, rect, inViewport, inPanel });
   }
 
-  // Sort: active panel elements FIRST, then viewport, then position
   rawElements.sort((a, b) => {
     if (hasOpenDialog) {
       if (a.inPanel !== b.inPanel) return a.inPanel ? -1 : 1;
@@ -201,7 +211,7 @@ function extractPage(): PageData {
     const { el, rect, inViewport, inPanel } = item;
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute('role') ?? tag;
-    const isInput = ['input', 'textarea', 'select'].includes(tag) || el.getAttribute('contenteditable') === 'true';
+    const isInputEl = ['input', 'textarea', 'select'].includes(tag) || el.getAttribute('contenteditable') === 'true';
 
     return {
       idx,
@@ -216,9 +226,12 @@ function extractPage(): PageData {
         width: rect.width,
         height: rect.height,
       },
-      isInput,
+      isInput: isInputEl,
       inputType: el.getAttribute('type') ?? undefined,
       placeholder: el.getAttribute('placeholder') ?? undefined,
+      value: isInputEl ? getInputValue(el) : undefined,
+      isRequired: isInputEl ? isRequired(el) : undefined,
+      isFilled: isInputEl ? isInputFilled(el) : undefined,
       isInViewport: inViewport,
       isInDialog: inPanel,
     };
@@ -240,6 +253,8 @@ let overlayHost: HTMLDivElement | null = null;
 let shadow: ShadowRoot | null = null;
 let currentStep: GuidanceStep | null = null;
 let actionCleanup: (() => void) | null = null;
+let repositionInterval: ReturnType<typeof setInterval> | null = null;
+let currentTarget: Element | null = null;
 
 function getOverlay(): ShadowRoot {
   if (shadow) return shadow;
@@ -262,20 +277,21 @@ function getOverlay(): ShadowRoot {
   style.textContent = `
     .highlight {
       position: fixed;
-      border: 3px solid #6366f1;
+      border: 3px solid #1d4ed8;
       border-radius: 6px;
       box-shadow: 0 0 0 4000px rgba(0,0,0,0.35);
       pointer-events: none;
+      transition: top 0.15s, left 0.15s, width 0.15s, height 0.15s;
       animation: pulse 1.5s ease-in-out infinite;
     }
     @keyframes pulse {
-      0%, 100% { box-shadow: 0 0 0 4000px rgba(0,0,0,0.35), 0 0 0 0 rgba(99,102,241,0.4); }
-      50% { box-shadow: 0 0 0 4000px rgba(0,0,0,0.35), 0 0 15px 5px rgba(99,102,241,0.3); }
+      0%, 100% { box-shadow: 0 0 0 4000px rgba(0,0,0,0.35), 0 0 0 0 rgba(29,78,216,0.4); }
+      50% { box-shadow: 0 0 0 4000px rgba(0,0,0,0.35), 0 0 15px 5px rgba(29,78,216,0.3); }
     }
     .card {
       position: fixed;
       background: #fff;
-      border: 2px solid #6366f1;
+      border: 2px solid #1d4ed8;
       border-radius: 12px;
       padding: 12px 16px;
       max-width: 280px;
@@ -283,13 +299,29 @@ function getOverlay(): ShadowRoot {
       font-family: system-ui, sans-serif;
       pointer-events: auto;
       z-index: 2147483647;
+      transition: top 0.15s, left 0.15s;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .badge {
+      font-size: 9px;
+      font-weight: 700;
+      color: #fff;
+      background: #1d4ed8;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
     .step-num {
       font-size: 11px;
       font-weight: 700;
-      color: #6366f1;
+      color: #1d4ed8;
       text-transform: uppercase;
-      margin-bottom: 4px;
     }
     .instruction {
       font-size: 14px;
@@ -300,17 +332,69 @@ function getOverlay(): ShadowRoot {
     .done-btn {
       font-size: 12px;
       padding: 6px 14px;
-      background: #6366f1;
+      background: #1d4ed8;
       color: #fff;
       border: none;
       border-radius: 6px;
       cursor: pointer;
     }
-    .done-btn:hover { background: #4f46e5; }
+    .done-btn:hover { background: #1e40af; }
   `;
   shadow.appendChild(style);
 
   return shadow;
+}
+
+function repositionOverlay() {
+  if (!currentTarget || !shadow) return;
+
+  const rect = currentTarget.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return;
+
+  const highlight = shadow.querySelector('.highlight') as HTMLElement | null;
+  const card = shadow.querySelector('.card') as HTMLElement | null;
+
+  if (highlight) {
+    Object.assign(highlight.style, {
+      top: `${rect.top - 4}px`,
+      left: `${rect.left - 4}px`,
+      width: `${rect.width + 8}px`,
+      height: `${rect.height + 8}px`,
+    });
+  }
+
+  if (card) {
+    const pos = computeCardPosition(rect);
+    card.style.top = `${pos.top}px`;
+    card.style.left = `${pos.left}px`;
+  }
+}
+
+function computeCardPosition(rect: DOMRect): { top: number; left: number } {
+  const pad = 12;
+  const cardW = 280;
+  const cardH = 120;
+  let cardTop: number;
+  let cardLeft: number;
+
+  if (window.innerHeight - rect.bottom > cardH + pad) {
+    cardTop = rect.bottom + pad;
+    cardLeft = Math.max(pad, Math.min(rect.left, window.innerWidth - cardW - pad));
+  } else if (rect.top > cardH + pad) {
+    cardTop = rect.top - cardH - pad;
+    cardLeft = Math.max(pad, Math.min(rect.left, window.innerWidth - cardW - pad));
+  } else if (rect.left > cardW + pad) {
+    cardTop = Math.max(pad, Math.min(rect.top, window.innerHeight - cardH - pad));
+    cardLeft = rect.left - cardW - pad;
+  } else {
+    cardTop = Math.max(pad, Math.min(rect.top, window.innerHeight - cardH - pad));
+    cardLeft = rect.right + pad;
+  }
+
+  return {
+    top: cardTop,
+    left: Math.max(pad, Math.min(cardLeft, window.innerWidth - cardW - pad)),
+  };
 }
 
 function showOverlay(step: GuidanceStep) {
@@ -330,33 +414,30 @@ function showOverlay(step: GuidanceStep) {
     if (hint.length > 0) {
       const all = document.querySelectorAll(INTERACTIVE_SELECTOR);
 
-      // Exact text match
       for (const el of all) {
         const elText = (el.textContent ?? '').toLowerCase().trim();
         if (elText === hint) {
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) { target = el; break; }
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) { target = el; break; }
         }
       }
 
-      // Partial text match
       if (!target && hint.length > 3) {
         for (const el of all) {
           const elText = (el.textContent ?? '').toLowerCase();
           if (elText.includes(hint) || hint.includes(elText.substring(0, 20))) {
-            const rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) { target = el; break; }
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) { target = el; break; }
           }
         }
       }
 
-      // aria-label match
       if (!target) {
         for (const el of all) {
           const aria = (el.getAttribute('aria-label') ?? '').toLowerCase();
           if (aria && (aria.includes(hint) || hint.includes(aria))) {
-            const rect = el.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) { target = el; break; }
+            const r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) { target = el; break; }
           }
         }
       }
@@ -369,10 +450,11 @@ function showOverlay(step: GuidanceStep) {
     return;
   }
 
+  currentTarget = target;
   const rect = target.getBoundingClientRect();
   const root = getOverlay();
 
-  // Clear previous
+  // Clear previous elements (keep style)
   for (const c of Array.from(root.children)) {
     if (c.tagName !== 'STYLE') c.remove();
   }
@@ -388,42 +470,21 @@ function showOverlay(step: GuidanceStep) {
   });
   root.appendChild(highlight);
 
-  // Instruction card — smart positioning
+  // Instruction card
   const card = document.createElement('div');
   card.className = 'card';
   card.innerHTML = `
-    <div class="step-num">Step ${step.stepNumber}</div>
+    <div class="card-header">
+      <span class="badge">NavAI</span>
+      <span class="step-num">Step ${step.stepNumber}</span>
+    </div>
     <div class="instruction">${escapeHtml(step.instruction)}</div>
-    <button class="done-btn">Done</button>
+    <button class="done-btn">Done &rarr;</button>
   `;
 
-  // Try below, then above, then left, then right of the target
-  const pad = 12;
-  const cardW = 280;
-  const cardH = 120; // estimated
-  let cardTop: number;
-  let cardLeft: number;
-
-  if (window.innerHeight - rect.bottom > cardH + pad) {
-    // Below
-    cardTop = rect.bottom + pad;
-    cardLeft = Math.max(pad, Math.min(rect.left, window.innerWidth - cardW - pad));
-  } else if (rect.top > cardH + pad) {
-    // Above
-    cardTop = rect.top - cardH - pad;
-    cardLeft = Math.max(pad, Math.min(rect.left, window.innerWidth - cardW - pad));
-  } else if (rect.left > cardW + pad) {
-    // Left
-    cardTop = Math.max(pad, Math.min(rect.top, window.innerHeight - cardH - pad));
-    cardLeft = rect.left - cardW - pad;
-  } else {
-    // Right
-    cardTop = Math.max(pad, Math.min(rect.top, window.innerHeight - cardH - pad));
-    cardLeft = rect.right + pad;
-  }
-
-  card.style.top = `${cardTop}px`;
-  card.style.left = `${Math.max(pad, Math.min(cardLeft, window.innerWidth - cardW - pad))}px`;
+  const pos = computeCardPosition(rect);
+  card.style.top = `${pos.top}px`;
+  card.style.left = `${pos.left}px`;
 
   card.querySelector('.done-btn')!.addEventListener('click', () => {
     hideOverlay();
@@ -436,6 +497,11 @@ function showOverlay(step: GuidanceStep) {
   if (rect.top < 0 || rect.bottom > window.innerHeight) {
     target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+
+  // Start scroll/resize tracking
+  window.addEventListener('scroll', repositionOverlay, { passive: true });
+  window.addEventListener('resize', repositionOverlay, { passive: true });
+  repositionInterval = setInterval(repositionOverlay, 300);
 
   listenForAction(target as HTMLElement, step);
 }
@@ -491,6 +557,15 @@ function cleanupListener() {
 function hideOverlay() {
   cleanupListener();
   currentStep = null;
+  currentTarget = null;
+
+  window.removeEventListener('scroll', repositionOverlay);
+  window.removeEventListener('resize', repositionOverlay);
+  if (repositionInterval) {
+    clearInterval(repositionInterval);
+    repositionInterval = null;
+  }
+
   if (shadow) {
     for (const c of Array.from(shadow.children)) {
       if (c.tagName !== 'STYLE') c.remove();
@@ -547,11 +622,12 @@ chrome.runtime.onMessage.addListener((msg: Message, _sender, respond) => {
   log('Received:', msg.type);
 
   switch (msg.type) {
-    case 'EXTRACT':
+    case 'EXTRACT': {
       const data = extractPage();
       log(`Extracted ${data.elements.length} elements, topLayer=${data.hasOpenDialog}`);
       respond({ type: 'PAGE_DATA', data });
       return true;
+    }
 
     case 'SHOW_STEP':
       showOverlay(msg.step);

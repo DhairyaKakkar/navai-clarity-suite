@@ -1,6 +1,4 @@
-// ═══════════════════════════════════════════════════════════════
 // NavAI — Side Panel UI
-// ═══════════════════════════════════════════════════════════════
 
 import type { Message, SessionState, PlannerMode, LLMConfig } from '../shared/types';
 
@@ -17,6 +15,8 @@ const startBtn = $<HTMLButtonElement>('start');
 const modeSelect = $<HTMLSelectElement>('mode');
 
 const goalDisplay = $('goal-display');
+const stepCard = $('step-card');
+const completeCard = $('complete-card');
 const stepNum = $('step-num');
 const instruction = $('instruction');
 const errorBox = $('error');
@@ -61,13 +61,24 @@ function render(state: SessionState) {
   show(activeSection);
 
   goalDisplay.textContent = state.goal;
-  stepNum.textContent = `Step ${state.step}`;
 
-  if (state.current) {
-    instruction.textContent = state.current.instruction;
+  // Handle completion
+  if (state.completed) {
+    show(completeCard);
+    hide(stepCard);
     hide(errorBox);
   } else {
-    instruction.textContent = 'Scanning page...';
+    hide(completeCard);
+    show(stepCard);
+
+    stepNum.textContent = `Step ${state.step}`;
+
+    if (state.current) {
+      instruction.textContent = state.current.instruction;
+      hide(errorBox);
+    } else {
+      instruction.textContent = 'Scanning page...';
+    }
   }
 
   // History
@@ -157,6 +168,9 @@ stopBtn.addEventListener('click', () => send({ type: 'STOP' }));
 chrome.runtime.onMessage.addListener((msg: Message) => {
   if (msg.type === 'STATE') render(msg.state);
   if (msg.type === 'ERROR') showError(msg.msg);
+  if (msg.type === 'COMPLETED') {
+    // Re-render will handle the UI via state.completed
+  }
 });
 
 // ═════════════════════════════════════════════════════════════════

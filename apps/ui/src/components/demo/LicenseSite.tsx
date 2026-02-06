@@ -4,10 +4,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
-import { SimulatedSiteProps, GuidanceStep } from '@/lib/types';
+import { SimulatedSiteProps } from '@/lib/types';
+
+const fieldToKey: Record<string, string> = {
+  'first-name': 'firstName',
+  'last-name': 'lastName',
+  'dob': 'dob',
+  'address': 'address',
+  'city': 'city',
+  'state': 'state',
+};
 
 export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: SimulatedSiteProps) {
-  const [step, setStep] = useState(1);
+  const [started, setStarted] = useState(false);
+  const [formStep, setFormStep] = useState(1);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -19,9 +29,10 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
     confirmed: false,
   });
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    onAction(`[data-navai="${field}"]`, true);
+  const handleInputChange = (navaiField: string, value: string) => {
+    const stateKey = fieldToKey[navaiField] || navaiField;
+    setFormData(prev => ({ ...prev, [stateKey]: value }));
+    onAction(`[data-navai="${navaiField}"]`, true);
   };
 
   const isTarget = (selector: string) => currentStep?.targetSelector === `[data-navai="${selector}"]`;
@@ -74,16 +85,16 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
           {/* Step indicator */}
           <div className={`mb-6 ${isCalm ? 'navai-distraction' : ''}`}>
             <div className="flex items-center gap-2 text-sm">
-              <span className={step >= 1 ? 'text-primary font-medium' : 'text-muted-foreground'}>1. Personal Info</span>
-              <span className="text-muted-foreground">→</span>
-              <span className={step >= 2 ? 'text-primary font-medium' : 'text-muted-foreground'}>2. Address</span>
-              <span className="text-muted-foreground">→</span>
-              <span className={step >= 3 ? 'text-primary font-medium' : 'text-muted-foreground'}>3. Documents</span>
+              <span className={formStep >= 1 ? 'text-primary font-medium' : 'text-muted-foreground'}>1. Personal Info</span>
+              <span className="text-muted-foreground">&rarr;</span>
+              <span className={formStep >= 2 ? 'text-primary font-medium' : 'text-muted-foreground'}>2. Address</span>
+              <span className="text-muted-foreground">&rarr;</span>
+              <span className={formStep >= 3 ? 'text-primary font-medium' : 'text-muted-foreground'}>3. Documents</span>
             </div>
           </div>
 
-          {/* Start button (before step 1) */}
-          {step === 1 && !formData.firstName && (
+          {/* Start button (before application started) */}
+          {!started && (
             <div className="text-center py-12">
               <h2 className="text-2xl font-semibold mb-4">Driver License Application</h2>
               <p className="text-muted-foreground mb-6 max-w-md mx-auto">
@@ -93,6 +104,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                 data-navai="start-application"
                 className="btn-pill-primary"
                 onClick={() => {
+                  setStarted(true);
                   onAction('[data-navai="start-application"]', true);
                 }}
               >
@@ -102,10 +114,10 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
           )}
 
           {/* Step 1: Personal Info */}
-          {step === 1 && formData.firstName !== '' && (
+          {started && formStep === 1 && (
             <div className="bg-card border border-border rounded-xl p-6">
               <h2 className="text-xl font-semibold mb-6">Personal Information</h2>
-              
+
               <div className="space-y-4">
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
@@ -129,7 +141,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                     />
                   </div>
                 </div>
-                
+
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="dob">Date of Birth *</Label>
@@ -149,7 +161,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                     data-navai="continue-step-1"
                     className="btn-pill-primary"
                     onClick={() => {
-                      setStep(2);
+                      setFormStep(2);
                       onAction('[data-navai="continue-step-1"]', true);
                     }}
                   >
@@ -161,10 +173,10 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
           )}
 
           {/* Step 2: Address */}
-          {step === 2 && (
+          {started && formStep === 2 && (
             <div className="bg-card border border-border rounded-xl p-6">
               <h2 className="text-xl font-semibold mb-6">Address Information</h2>
-              
+
               <div className="space-y-4">
                 <div>
                   <Label htmlFor="address">Street Address *</Label>
@@ -177,7 +189,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                     placeholder="123 Main Street"
                   />
                 </div>
-                
+
                 <div className="grid md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="city">City *</Label>
@@ -198,7 +210,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                         onAction('[data-navai="state"]', true);
                       }}
                     >
-                      <SelectTrigger 
+                      <SelectTrigger
                         id="state"
                         data-navai="state"
                         className={isTarget('state') ? 'ring-2 ring-primary' : ''}
@@ -218,7 +230,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                 <div className="flex justify-between pt-4">
                   <Button
                     variant="outline"
-                    onClick={() => setStep(1)}
+                    onClick={() => setFormStep(1)}
                     className={isCalm ? 'navai-distraction' : ''}
                   >
                     Back
@@ -227,7 +239,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                     data-navai="continue-step-2"
                     className="btn-pill-primary"
                     onClick={() => {
-                      setStep(3);
+                      setFormStep(3);
                       onAction('[data-navai="continue-step-2"]', true);
                     }}
                   >
@@ -239,14 +251,14 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
           )}
 
           {/* Step 3: Documents */}
-          {step === 3 && (
+          {started && formStep === 3 && (
             <div className="bg-card border border-border rounded-xl p-6">
               <h2 className="text-xl font-semibold mb-6">Upload Documents</h2>
-              
+
               <div className="space-y-6">
                 <div>
                   <Label>Proof of Identity *</Label>
-                  <div 
+                  <div
                     data-navai="upload-id"
                     className={`mt-2 border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:bg-secondary/50 transition-colors ${
                       isTarget('upload-id') ? 'border-primary bg-primary/5' : 'border-border'
@@ -257,7 +269,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                     }}
                   >
                     {formData.uploadedFile ? (
-                      <p className="text-primary font-medium">✓ File uploaded: passport.pdf</p>
+                      <p className="text-primary font-medium">&#10003; File uploaded: passport.pdf</p>
                     ) : (
                       <>
                         <p className="text-muted-foreground mb-2">Click to upload your ID document</p>
@@ -286,7 +298,7 @@ export function LicenseSite({ onAction, currentStep, isCalm, isFocusAssist }: Si
                 <div className="flex justify-between pt-4">
                   <Button
                     variant="outline"
-                    onClick={() => setStep(2)}
+                    onClick={() => setFormStep(2)}
                     className={isCalm ? 'navai-distraction' : ''}
                   >
                     Back

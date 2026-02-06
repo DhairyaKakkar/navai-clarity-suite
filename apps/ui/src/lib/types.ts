@@ -46,6 +46,8 @@ export interface UserPreferences {
   largeText: boolean;
   highContrast: boolean;
   focusAssist: boolean;
+  bionicReading: boolean;
+  widerSpacing: boolean;
 }
 
 export interface DemoState {

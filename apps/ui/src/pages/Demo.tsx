@@ -1,16 +1,16 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, HelpCircle, X, ChevronRight, Download, RotateCcw, Info } from 'lucide-react';
+import { ArrowLeft, HelpCircle, ChevronRight, Download, RotateCcw, Eye, Type } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { useFrictionDetection } from '@/hooks/use-friction-detection';
 import { getTaskFlow, matchGoalToSite } from '@/lib/task-flows';
-import { GuidanceStep, AdaptationLevel } from '@/lib/types';
+import { GuidanceStep } from '@/lib/types';
 import { loadPreferences, savePreferences, applyPreferences } from '@/lib/preferences';
 import { LicenseSite } from '@/components/demo/LicenseSite';
 import { BillSite } from '@/components/demo/BillSite';
@@ -18,6 +18,54 @@ import { UniversitySite } from '@/components/demo/UniversitySite';
 import { TargetHighlight } from '@/components/demo/TargetHighlight';
 import { FrictionMeter } from '@/components/demo/FrictionMeter';
 import { WhyChangedDrawer } from '@/components/demo/WhyChangedDrawer';
+
+/** Walk text nodes inside a container and bold the first N letters of each word. */
+function applyBionicReading(container: HTMLElement) {
+  const SKIP_TAGS = new Set(['INPUT', 'TEXTAREA', 'SCRIPT', 'STYLE', 'SELECT', 'OPTION', 'SVG', 'PATH', 'BUTTON']);
+
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+      if (parent.closest('button, input, textarea, select, svg')) return NodeFilter.FILTER_REJECT;
+      if (parent.hasAttribute('data-bionic')) return NodeFilter.FILTER_REJECT;
+      if (!(node.textContent || '').trim()) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+
+  const nodes: Text[] = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+
+  for (const node of nodes) {
+    const text = node.textContent || '';
+    if (!text.trim()) continue;
+
+    const parent = node.parentNode;
+    if (!parent) continue;
+
+    const fragment = document.createDocumentFragment();
+    const segments = text.split(/(\s+)/);
+
+    for (const seg of segments) {
+      if (/^\s*$/.test(seg) || !seg) {
+        fragment.appendChild(document.createTextNode(seg));
+        continue;
+      }
+      const boldLen = Math.max(1, Math.ceil(seg.length * 0.4));
+      const span = document.createElement('span');
+      span.setAttribute('data-bionic', '1');
+      const b = document.createElement('b');
+      b.textContent = seg.slice(0, boldLen);
+      span.appendChild(b);
+      span.appendChild(document.createTextNode(seg.slice(boldLen)));
+      fragment.appendChild(span);
+    }
+
+    parent.replaceChild(fragment, node);
+  }
+}
 
 const Demo = () => {
   // State
@@ -29,10 +77,10 @@ const Demo = () => {
   const [calmMode, setCalmMode] = useState(false);
   const [showHint, setShowHint] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
-  
+
   // Preferences
   const [preferences, setPreferences] = useState(() => loadPreferences());
-  
+
   // Friction detection
   const {
     frictionScore,
@@ -55,8 +103,8 @@ const Demo = () => {
 
   // Get current task flow and step
   const taskFlow = getTaskFlow(currentSite);
-  const currentStep: GuidanceStep | null = taskFlow && isActive 
-    ? taskFlow.steps[currentStepIndex] || null 
+  const currentStep: GuidanceStep | null = taskFlow && isActive
+    ? taskFlow.steps[currentStepIndex] || null
     : null;
 
   // Apply preferences
@@ -64,10 +112,20 @@ const Demo = () => {
     applyPreferences(preferences);
   }, [preferences]);
 
+  // Bionic reading: post-process text nodes in the canvas after each render
+  useEffect(() => {
+    if (!preferences.bionicReading || !canvasRef.current) return;
+    // Small delay so React finishes DOM updates first
+    const id = requestAnimationFrame(() => {
+      if (canvasRef.current) applyBionicReading(canvasRef.current);
+    });
+    return () => cancelAnimationFrame(id);
+  });
+
   // Track scroll
   useEffect(() => {
     if (!isActive || !canvasRef.current) return;
-    
+
     let lastScrollTop = 0;
     const handleScroll = (e: Event) => {
       const target = e.target as HTMLElement;
@@ -75,7 +133,7 @@ const Demo = () => {
       lastScrollTop = target.scrollTop;
       recordScroll(direction);
     };
-    
+
     const canvas = canvasRef.current;
     canvas.addEventListener('scroll', handleScroll, { passive: true });
     return () => canvas.removeEventListener('scroll', handleScroll);
@@ -86,10 +144,10 @@ const Demo = () => {
     if (!isActive) return;
     const handleMouseMove = () => recordActivity();
     const handleKeyDown = () => recordActivity();
-    
+
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
     window.addEventListener('keydown', handleKeyDown, { passive: true });
-    
+
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('keydown', handleKeyDown);
@@ -101,18 +159,18 @@ const Demo = () => {
       toast.error('Please enter a goal');
       return;
     }
-    
+
     const matchedSite = matchGoalToSite(goal);
     if (matchedSite) {
       setCurrentSite(matchedSite as 'license' | 'bill' | 'university');
     }
-    
+
     setCurrentStepIndex(0);
     setIsActive(true);
     setCalmMode(false);
     setShowHint(false);
     resetFriction();
-    
+
     toast.success('Guide started!', {
       description: 'Follow the highlighted steps to complete your goal.',
     });
@@ -137,14 +195,14 @@ const Demo = () => {
 
   const handleAction = useCallback((selector: string, causedChange: boolean) => {
     if (!currentStep) return;
-    
+
     const isOnTarget = selector === currentStep.targetSelector;
     const rect = canvasRef.current?.getBoundingClientRect();
     const x = rect ? rect.left + rect.width / 2 : 0;
     const y = rect ? rect.top + rect.height / 2 : 0;
-    
+
     recordClick(x, y, isOnTarget, causedChange);
-    
+
     if (isOnTarget && causedChange) {
       // Advance to next step
       if (taskFlow && currentStepIndex < taskFlow.steps.length - 1) {
@@ -152,7 +210,7 @@ const Demo = () => {
         setShowHint(false);
       } else {
         setIsActive(false);
-        toast.success('🎉 Goal completed!', {
+        toast.success('Goal completed!', {
           description: 'You\'ve finished all the steps.',
         });
       }
@@ -186,8 +244,8 @@ const Demo = () => {
     <div className={`min-h-screen flex flex-col ${preferences.largeText ? 'text-size-large' : ''}`}>
       {/* Header */}
       <header className="h-14 border-b border-border flex items-center px-4 gap-4 shrink-0">
-        <Link 
-          to="/" 
+        <Link
+          to="/"
           className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -200,8 +258,8 @@ const Demo = () => {
         {/* Left: Simulated Website Canvas */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Site Tabs */}
-          <Tabs 
-            value={currentSite} 
+          <Tabs
+            value={currentSite}
             onValueChange={(v) => {
               if (!isActive) {
                 setCurrentSite(v as typeof currentSite);
@@ -210,22 +268,22 @@ const Demo = () => {
             className="shrink-0"
           >
             <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0">
-              <TabsTrigger 
-                value="license" 
+              <TabsTrigger
+                value="license"
                 disabled={isActive}
                 className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
               >
                 Driver License
               </TabsTrigger>
-              <TabsTrigger 
-                value="bill" 
+              <TabsTrigger
+                value="bill"
                 disabled={isActive}
                 className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
               >
                 Pay a Bill
               </TabsTrigger>
-              <TabsTrigger 
-                value="university" 
+              <TabsTrigger
+                value="university"
                 disabled={isActive}
                 className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-3"
               >
@@ -237,34 +295,34 @@ const Demo = () => {
           {/* Canvas */}
           <div ref={canvasRef} className={canvasClasses}>
             {currentSite === 'license' && (
-              <LicenseSite 
-                onAction={handleAction} 
+              <LicenseSite
+                onAction={handleAction}
                 currentStep={currentStep}
                 isCalm={calmMode}
                 isFocusAssist={preferences.focusAssist}
               />
             )}
             {currentSite === 'bill' && (
-              <BillSite 
-                onAction={handleAction} 
+              <BillSite
+                onAction={handleAction}
                 currentStep={currentStep}
                 isCalm={calmMode}
                 isFocusAssist={preferences.focusAssist}
               />
             )}
             {currentSite === 'university' && (
-              <UniversitySite 
-                onAction={handleAction} 
+              <UniversitySite
+                onAction={handleAction}
                 currentStep={currentStep}
                 isCalm={calmMode}
                 isFocusAssist={preferences.focusAssist}
               />
             )}
-            
+
             {/* Target Highlight Overlay */}
             {isActive && currentStep && (
-              <TargetHighlight 
-                selector={currentStep.targetSelector} 
+              <TargetHighlight
+                selector={currentStep.targetSelector}
                 containerRef={canvasRef}
                 isCalm={calmMode}
               />
@@ -324,11 +382,11 @@ const Demo = () => {
                     Skip <ChevronRight className="w-3 h-3 ml-1" />
                   </Button>
                 </div>
-                
+
                 <p className={`font-medium leading-relaxed ${adaptationLevel >= 2 ? 'text-lg' : ''}`}>
                   {adaptationLevel >= 2 ? currentStep.shortInstruction : currentStep.instructionText}
                 </p>
-                
+
                 {/* Hint button for level 1+ */}
                 {adaptationLevel >= 1 && currentStep.hint && !showHint && (
                   <Button
@@ -341,14 +399,14 @@ const Demo = () => {
                     Need a hint?
                   </Button>
                 )}
-                
+
                 {showHint && currentStep.hint && (
                   <motion.p
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     className="mt-3 text-sm text-muted-foreground bg-background p-3 rounded-lg"
                   >
-                    💡 {currentStep.hint}
+                    {currentStep.hint}
                   </motion.p>
                 )}
               </motion.div>
@@ -358,8 +416,8 @@ const Demo = () => {
           {/* Friction Meter */}
           {isActive && (
             <div className="px-4 py-3 border-b border-border">
-              <FrictionMeter 
-                score={frictionScore} 
+              <FrictionMeter
+                score={frictionScore}
                 level={adaptationLevel}
                 onWhyClick={() => setShowWhyChanged(true)}
               />
@@ -368,8 +426,8 @@ const Demo = () => {
 
           {/* Controls */}
           <div className="p-4 space-y-4 flex-1 overflow-auto">
-            <h3 className="text-sm font-medium text-muted-foreground">Controls</h3>
-            
+            <h3 className="text-sm font-medium text-muted-foreground">Accessibility Controls</h3>
+
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label htmlFor="auto-calm" className="text-sm cursor-pointer">
@@ -381,7 +439,7 @@ const Demo = () => {
                   onCheckedChange={(v) => handleUpdatePreference('autoCalm', v)}
                 />
               </div>
-              
+
               <div className="flex items-center justify-between">
                 <Label htmlFor="reduce-motion" className="text-sm cursor-pointer">
                   Reduce Motion
@@ -392,7 +450,7 @@ const Demo = () => {
                   onCheckedChange={(v) => handleUpdatePreference('reduceMotion', v)}
                 />
               </div>
-              
+
               <div className="flex items-center justify-between">
                 <Label htmlFor="large-text" className="text-sm cursor-pointer">
                   Larger Text
@@ -403,7 +461,7 @@ const Demo = () => {
                   onCheckedChange={(v) => handleUpdatePreference('largeText', v)}
                 />
               </div>
-              
+
               <div className="flex items-center justify-between">
                 <Label htmlFor="high-contrast" className="text-sm cursor-pointer">
                   High Contrast
@@ -414,7 +472,7 @@ const Demo = () => {
                   onCheckedChange={(v) => handleUpdatePreference('highContrast', v)}
                 />
               </div>
-              
+
               <div className="flex items-center justify-between">
                 <Label htmlFor="focus-assist" className="text-sm cursor-pointer">
                   Focus Assist
@@ -423,6 +481,36 @@ const Demo = () => {
                   id="focus-assist"
                   checked={preferences.focusAssist}
                   onCheckedChange={(v) => handleUpdatePreference('focusAssist', v)}
+                />
+              </div>
+
+              <div className="h-px bg-border my-2" />
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Label htmlFor="bionic-reading" className="text-sm cursor-pointer">
+                    Bionic Reading
+                  </Label>
+                </div>
+                <Switch
+                  id="bionic-reading"
+                  checked={preferences.bionicReading}
+                  onCheckedChange={(v) => handleUpdatePreference('bionicReading', v)}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Type className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Label htmlFor="wider-spacing" className="text-sm cursor-pointer">
+                    Wider Spacing
+                  </Label>
+                </div>
+                <Switch
+                  id="wider-spacing"
+                  checked={preferences.widerSpacing}
+                  onCheckedChange={(v) => handleUpdatePreference('widerSpacing', v)}
                 />
               </div>
             </div>
@@ -439,7 +527,7 @@ const Demo = () => {
               <Download className="w-4 h-4 mr-2" />
               Export Session Log
             </Button>
-            
+
             <Button
               variant="outline"
               size="sm"
@@ -449,7 +537,7 @@ const Demo = () => {
               <RotateCcw className="w-4 h-4 mr-2" />
               Reset Demo
             </Button>
-            
+
             <p className="text-xs text-muted-foreground text-center pt-2">
               All data stays on this device
             </p>

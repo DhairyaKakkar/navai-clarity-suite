@@ -183,6 +183,24 @@
     @apply hidden;
   }
 
+  /* Wider spacing mode */
+  .wider-spacing {
+    letter-spacing: 0.04em;
+    word-spacing: 0.12em;
+  }
+  .wider-spacing p,
+  .wider-spacing li,
+  .wider-spacing label,
+  .wider-spacing span,
+  .wider-spacing td {
+    line-height: 1.9;
+  }
+
+  /* Bionic reading */
+  [data-bionic] b {
+    font-weight: 700;
+  }
+
   /* Friction meter */
   .friction-meter {
     @apply h-1 w-full overflow-hidden rounded-full bg-muted;

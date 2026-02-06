@@ -8,6 +8,8 @@ const defaultPreferences: UserPreferences = {
   largeText: false,
   highContrast: false,
   focusAssist: false,
+  bionicReading: false,
+  widerSpacing: false,
 };
 
 export function loadPreferences(): UserPreferences {
@@ -59,5 +61,12 @@ export function applyPreferences(preferences: UserPreferences): void {
     root.classList.add('high-contrast');
   } else {
     root.classList.remove('high-contrast');
+  }
+
+  // Wider spacing
+  if (preferences.widerSpacing) {
+    root.classList.add('wider-spacing');
+  } else {
+    root.classList.remove('wider-spacing');
   }
 }

@@ -58,9 +58,9 @@ export default {
           ring: "hsl(var(--sidebar-ring))",
         },
         navai: {
-          lime: "hsl(var(--navai-lime))",
-          "lime-hover": "hsl(var(--navai-lime-hover))",
-          "lime-glow": "hsl(var(--navai-lime-glow))",
+          blue: "hsl(var(--navai-blue))",
+          "blue-hover": "hsl(var(--navai-blue-hover))",
+          "blue-glow": "hsl(var(--navai-blue-glow))",
           surface: "hsl(var(--navai-surface))",
         },
         friction: {
